@@ -159,7 +159,11 @@ void stop_gate(bool full_stop=false, int motor_delay=def_motor_delay){
   waiting = false;
   noTone(buzzer_pin);
   buzzer_state = OFF;
-  action_on_motor(OFF, OPEN, 0, motor_delay);
+  action_on_motor(OFF, direction_state, 0, motor_delay);
+  if(motor_delay < def_dir_delay){
+    delay(def_dir_delay - motor_delay);
+  }
+  action_on_motor(OFF, OPEN, 0, 0);
 }
 
 void move_gate(int direction, int dir_delay = def_dir_delay,
