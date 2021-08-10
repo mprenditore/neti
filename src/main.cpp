@@ -1,6 +1,6 @@
-/* Garage Door Advanced System
+/* NETI Gatekeeper
 *
-*  GDC can control different sensors and motors.
+*  NETI can control different sensors and motors.
 *
 *  Functionalities:
 *    * Motor control via relays
@@ -385,7 +385,7 @@ void setup(){
 #ifdef DEBUG
   Serial.begin(BOUND_RATE);
 #endif
-  DPRINT("GDS is starting ");
+  DPRINT("NETI is starting ");
   // set the digital pin as output:
   pinMode(motor_pin, OUTPUT);
   pinMode(direction_pin, OUTPUT);
