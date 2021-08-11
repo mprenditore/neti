@@ -61,3 +61,10 @@ const unsigned long force_stop_time = 3000;                  // milliseconds bet
 const unsigned long buzzer_on_time = 50;                     // milliseconds for waiting buzzer ON status
 const unsigned long buzzer_off_time = 2000;                  // milliseconds for waiting buzzer OFF status
 const unsigned long buzzer_speedup_timeout = 10000;          // milliseconds remaining from when reduce waiting bugger OFF status time
+
+int get_interrupt_mode(int pin_config){
+  if(pin_config == NO){
+    return FALLING;
+  }
+  return RISING;
+}
