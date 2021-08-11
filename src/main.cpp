@@ -17,27 +17,16 @@
 *
 */
 #include <Arduino.h>
-#include "config.h"
 #include "pitches.h"
-
-#ifdef CHECK_ALL
-  #define LOOP(...) check_loop()     //enable check_loop
-#else
-  #define LOOP(...) normal_loop()    //enable normal_loop
-#endif
-
-#ifdef DEBUG
-  #define DPRINT(...)   Serial.print(__VA_ARGS__)     //DPRINT is a macro, debug print
-  #define DPRINTLN(...) Serial.println(__VA_ARGS__)   //DPRINTLN is a macro, debug print with new line
-#else
-  #define DPRINT(...)     //now defines a blank line
-  #define DPRINTLN(...)   //now defines a blank line
-#endif
+#include "config.h"
+#include "debug.h"
 
 // main variables (don't touch)
 bool standby = true;                        // is the system fully stopped?
 bool waiting = false;                       // is the port waiting before closing?
 bool running = false;                       // is the port running?
+bool bounced = false;                       // have the port bounced?
+bool stop_pressed = false;
 int direction_state = OPEN;                 // OPEN / CLOSE
 int motor_state = OFF;                      // ON / OFF
 int buzzer_state = OFF;                      // ON / OFF
@@ -66,6 +55,13 @@ int m_n_boot[] = {NOTE_G1, NOTE_B5, NOTE_A7};
 int m_d_boot[] = {16, 16, 8};
 int m_t_boot = 120;
 
+// interrupt mode variables
+int stop_interrupt_mode = get_interrupt_mode(stop_conf);
+int safety_interrupt_mode = get_interrupt_mode(safety_conf);
+int run_interrupt_mode = get_interrupt_mode(run_conf);
+int end_c_interrupt_mode = get_interrupt_mode(end_c_conf);
+int end_o_interrupt_mode = get_interrupt_mode(end_o_conf);
+
 int get_status(){
   status = ON_OPEN;
   if(motor_state == ON){
@@ -77,9 +73,11 @@ int get_status(){
   }else{
     status = OFF_CLOSE;
   }
+  DPRINTPRE();
+  DPRINT("STATUS: ");
+  DPRINTLN(status);
   return status;
 }
-
 
 void play_tune(int notes[], int durations[], int BPM){
   // iterate over the notes of the tune:
@@ -118,6 +116,13 @@ bool active(int pin_number, bool control_state=NO){
   return false;
 }
 
+bool stop_activated(){
+  if (active(stop_pin, stop_conf)){
+    return true;
+  }
+  return false;
+}
+
 bool safety_activated(){
   if (active(safety_pin, safety_conf)){
     return true;
@@ -136,6 +141,7 @@ bool run_activated(){
 
 void action_on_motor(int motor = ON, int direction = OPEN,
                      int dir_delay = def_dir_delay, int motor_delay = def_motor_delay){
+  DPRINTPRE();
   DPRINT("MOTOR ACTION direction(0=CLOSE / 1=OPEN): ");
   DPRINT(direction);
   DPRINT(" - motor (0=ON / 1=OFF): ");
@@ -147,11 +153,11 @@ void action_on_motor(int motor = ON, int direction = OPEN,
   delay(dir_delay);
   digitalWrite(motor_pin, motor_state);
   delay(motor_delay);
-  delay(def_lock_delay);
-  digitalWrite(lock_pin, LOCK);
+  get_status();
 }
 
-void stop_gate(bool full_stop=false, int motor_delay=def_motor_delay){
+void stop_gate(bool full_stop=false, int dir_delay=def_dir_delay){
+  DPRINTPRE();
   DPRINT("Gate: stop - standby: ");
   DPRINTLN(full_stop);
   standby = full_stop;
@@ -159,18 +165,30 @@ void stop_gate(bool full_stop=false, int motor_delay=def_motor_delay){
   waiting = false;
   noTone(buzzer_pin);
   buzzer_state = OFF;
-  action_on_motor(OFF, direction_state, 0, motor_delay);
-  if(motor_delay < def_dir_delay){
-    delay(def_dir_delay - motor_delay);
+  action_on_motor(OFF, direction_state, 0, dir_delay);
+  if(dir_delay < def_dir_delay){
+    delay(def_dir_delay - dir_delay);
   }
   action_on_motor(OFF, OPEN, 0, 0);
+
+  stop_pressed = false;
+}
+
+void check_stop(){
+  if(stop_pressed or stop_activated()){
+    buz(100,def_dir_delay,0);  // at least `def_dir_delay` to prevent a too fast change of direction after turn off
+    stop_gate(true);
+  }
 }
 
 void move_gate(int direction, int dir_delay = def_dir_delay,
                int motor_delay = def_motor_delay){
   if(running == true){
+    check_stop();
+    DPRINTPRE();
     DPRINTLN("RUNNING...");
     if(millis() - door_timeout_prev_millis >= door_timeout_time){
+      DPRINTPRE();
       DPRINT("Running timeout elapsed: ");
       DPRINTLN(millis() - door_timeout_prev_millis);
       stop_gate(true);
@@ -195,19 +213,23 @@ void move_gate(int direction, int dir_delay = def_dir_delay,
     }
   }else{
     if(direction == CLOSE && safety_activated() == true){
+      DPRINTPRE();
       DPRINTLN("Gate: move - skipping because security is activated");
       stop_gate(true);
       play_tune(m_n_alert, m_d_alert, m_t_alert);
       return;
     }
+    DPRINTPRE();
     DPRINT("Gate: move - direction: ");
     DPRINTLN(direction);
+    DPRINTPRE();
     DPRINTLN("RESET RUNNING timer");
     standby = false;
     running = true;
     door_timeout_prev_millis = millis();
     action_on_motor(ON, direction, dir_delay, motor_delay);
   }
+  bounced = false;
 }
 
 void waiting_buzzer(int buzzer_f, unsigned long buzzer_on_t,
@@ -228,11 +250,13 @@ void waiting_buzzer(int buzzer_f, unsigned long buzzer_on_t,
 }
 
 void wait_gate(){
+  check_stop();
   if(standby == false){
     if(waiting == true){
       door_timer = ((millis() - door_waiting_prev_millis) - door_waiting_time) * -1;
       if (door_timer <= buzzer_speedup_timeout){
         buzzer_current_off_time = door_timer / 10;
+        DPRINTPRE();
         DPRINT("speed_up buzzer...");
         DPRINTLN(buzzer_current_off_time);
       }else{
@@ -246,19 +270,21 @@ void wait_gate(){
         }else{
           elapsed_time = millis() - force_close_prev_millis;
           if(elapsed_time >=500 && elapsed_time <= force_close_time){
+            DPRINTPRE();
             DPRINT("Force close - double RUN detected in: ");
             DPRINTLN(elapsed_time);
             force_close_prev_millis = 0;
             waiting = false;
             noTone(buzzer_pin);
             buzzer_state = OFF;
-            move_gate(CLOSE, def_dir_delay);
+            move_gate(CLOSE, def_dir_delay, 50);
           }else{
             force_close_prev_millis = millis();
           }
         }
       }
       if(millis() - door_waiting_prev_millis >= door_waiting_time){
+        DPRINTPRE();
         DPRINT("Waiting timeout elapsed: ");
         DPRINTLN(millis() - door_waiting_prev_millis);
         force_close_prev_millis = 0;
@@ -276,6 +302,7 @@ void wait_gate(){
 }
 
 void restart_gate(){
+  DPRINTPRE();
   DPRINTLN("Gate: restart");
   stop_gate(false, restart_dir_delay);
   play_tune(m_n_restart, m_d_restart, m_t_restart);
@@ -283,13 +310,12 @@ void restart_gate(){
 }
 
 bool check_end_o(){
-  get_status();
   if (active(end_o_pin, end_o_conf)){
+    DPRINTPRE();
     DPRINTLN("PRESSED: end_o");
     switch (status){
       case ON_OPEN:
       case OFF_OPEN:
-      case OFF_CLOSE:  // should never happen
         wait_gate();
         break;
       default:
@@ -297,14 +323,33 @@ bool check_end_o(){
     }
     return true;
   }else{
-    waiting = false;
+    if(waiting == true){
+      if(bounced == false &&
+         (millis() - door_waiting_prev_millis) <= bouncing_timeout){
+        DPRINT("door_waiting_prev_millis at: ");
+        DPRINTLN(door_waiting_prev_millis);
+        DPRINT("end_o bounced at: ");
+        DPRINTLN(millis());
+        bounced = true;
+        DPRINT("Bounced : ");
+        DPRINTLN(bounced);
+        return false;
+      }
+      if(bounced == false){
+        buz(200,150,0);
+        stop_gate(true, 0);
+      }
+      else{
+        wait_gate();
+      }
+    }
     return false;
   }
 }
 
 bool check_end_c(){
-  get_status();
   if (active(end_c_pin, end_c_conf)){
+    DPRINTPRE();
     DPRINTLN("PRESSED: enc_c");
     switch (status){
       case ON_CLOSE:
@@ -321,8 +366,8 @@ bool check_end_c(){
 }
 
 bool check_security(){
-  get_status();
   if (safety_activated()){
+    DPRINTPRE();
     DPRINTLN("ACTIVATED: photocecell");
     switch (status){
       case ON_CLOSE:
@@ -336,41 +381,40 @@ bool check_security(){
   return false;
 }
 
-bool check_stop(){
-  get_status();
-  if (active(stop_pin, stop_conf)){
-    DPRINTLN("PRESSED: stop");
-    stop_gate(true);
-    buz(100,50,0);
-    return true;
+
+ICACHE_RAM_ATTR void isr_stop_pressed() {
+  if(stop_pressed == false && standby == false){
+    stop_pressed = true;
+    DPRINTPRE();
+    DPRINTLN(" ## Interrupt | PRESSED: stop");
+    digitalWrite(motor_pin, OFF);
+    DPRINTPRE();
+    DPRINTLN(" ## Interrupt | stopped");
   }
-  return false;
 }
 
 bool check_run(){
-  get_status();
   if (run_activated() == true){
     standby = false;
+    DPRINTPRE();
     DPRINTLN("PRESSED: run");
     switch (status){
-      case ON_OPEN:
-        move_gate(OPEN);
-        break;
       case OFF_OPEN:
-        if (check_end_o() == false &&
-            check_stop() == false){
-          digitalWrite(lock_pin, UNLOCK);
-          move_gate(OPEN, def_dir_delay);
-          digitalWrite(lock_pin, LOCK);
+        if (stop_activated() ==false &&
+            waiting == false){
+          #ifdef ELECTRIC_LOCK
+            digitalWrite(lock_pin, UNLOCK);
+          #endif
+          move_gate(OPEN, def_dir_delay, 0);
+          #ifdef ELECTRIC_LOCK
+            delay(def_lock_delay);
+            digitalWrite(lock_pin, LOCK);
+          #endif
         }
         break;
       case ON_CLOSE:
-        restart_gate();  // to check with dad
-        break;
-      case OFF_CLOSE:
-        if(check_stop() == false){
-          restart_gate();
-        }
+      case OFF_CLOSE:  //should never happen
+        restart_gate();
         break;
       default:
         break;
@@ -385,16 +429,21 @@ void setup(){
 #ifdef DEBUG
   Serial.begin(BOUND_RATE);
 #endif
-  DPRINT("NETI is starting ");
+  DPRINTLN("");
+  DPRINTLN("NETI is starting ");
   // set the digital pin as output:
   pinMode(motor_pin, OUTPUT);
   pinMode(direction_pin, OUTPUT);
-  pinMode(lock_pin, OUTPUT);
+  #ifdef ELECTRIC_LOCK
+    pinMode(lock_pin, OUTPUT);
+  #endif
   DPRINT(".");
   // init relays
   digitalWrite(motor_pin, OFF);
   digitalWrite(direction_pin, OPEN);
-  digitalWrite(lock_pin, LOCK);
+  #ifdef ELECTRIC_LOCK
+    digitalWrite(lock_pin, LOCK);
+  #endif
   DPRINT(".");
   // set input in pullup mode
   pinMode(end_o_pin, INPUT_PULLUP);
@@ -402,6 +451,8 @@ void setup(){
   pinMode(safety_pin, INPUT_PULLUP);
   pinMode(stop_pin, INPUT_PULLUP);
   pinMode(run_pin, INPUT_PULLUP);
+  // interrupts
+  attachInterrupt(digitalPinToInterrupt(stop_pin), isr_stop_pressed, stop_interrupt_mode);
   DPRINTLN(". Started!");
   play_tune(m_n_boot, m_d_boot, m_t_boot);
 }
@@ -428,14 +479,20 @@ void check_loop(){
 }
 
 void normal_loop(){
-  if(running == true){
-    move_gate(direction_state);
-  }
   if (standby == false){
     check_stop();
-    check_end_o();
-    check_end_c();
     check_security();
+    switch (status){
+      case OFF_OPEN:
+      case ON_OPEN:
+        check_end_o();
+        break;
+      case ON_CLOSE:
+        check_end_c();
+        break;
+      default:
+        break;
+    }
   }
   check_run();
 }
