@@ -2,8 +2,11 @@
 
 // #define CHECK_ALL  //comment this lie to go into CheckAll mode.
                       //  useful to check that all connections work
-#define DEBUG   //comment this line to disable all Print
+// #define DEBUG   //comment this line to disable all Print
                 //  DPRINT & DPRINTLN lines are defined as blank.
+
+// #define WORKBENCH_TEST  // uncomment this line to have all pin configs
+                      // as NO (Normally Open) for workbench testing
 
 // #define ELECTRIC_LOCK  // comment this line if you don't have the control
                   // an external electric lock
@@ -50,11 +53,19 @@ const int motor_pin = D2;
 const int lock_pin = D4;
 
 // input configuration
-const int safety_conf = NC;
-const int stop_conf = NC;
-const int run_conf = NO;
-const int end_c_conf = NO;
-const int end_o_conf = NO;
+#ifdef WORKBENCH_TEST
+    const int safety_conf = NO;
+    const int stop_conf = NO;
+    const int run_conf = NO;
+    const int end_c_conf = NO;
+    const int end_o_conf = NO;
+#else
+    const int safety_conf = NC;
+    const int stop_conf = NC;
+    const int run_conf = NO;
+    const int end_c_conf = NO;
+    const int end_o_conf = NO;
+#endif
 
 // timeouts
 const unsigned long door_waiting_time = 45000;               // milliseconds of door waiting time
@@ -64,6 +75,7 @@ const unsigned long force_stop_time = 3000;                  // milliseconds bet
 const unsigned long buzzer_on_time = 50;                     // milliseconds for waiting buzzer ON status
 const unsigned long buzzer_off_time = 2000;                  // milliseconds for waiting buzzer OFF status
 const unsigned long buzzer_speedup_timeout = 10000;          // milliseconds remaining from when reduce waiting bugger OFF status time
+const unsigned long bouncing_timeout = 2000;                 // milliseconds for door bouncing detection
 
 int get_interrupt_mode(int pin_config){
   if(pin_config == NO){
