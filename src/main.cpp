@@ -363,6 +363,7 @@ bool check_run(){
   if (run_activated() == true){
     standby = false;
     DPLN("PRESSED: run");
+    check_end_o();
     switch (status){
       case OFF_OPEN:
         if (stop_activated() ==false &&
