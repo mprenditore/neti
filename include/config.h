@@ -32,7 +32,7 @@ const long wait_buzzer_freq = 1000;
 const int tune_size = 6;
 
 // def delays
-const int def_dir_delay = 250;
+const int def_dir_delay = 500;
 const int def_motor_delay = 100;
 const int def_lock_delay = 1000;
 // custom delays
